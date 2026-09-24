@@ -9,6 +9,7 @@
 //! offset into that slave's memory; for a logical command it is thirty-two
 //! bits into the memory the fieldbus memory management units map.
 
+use transport::ceiling;
 use transport::error::{Result, protocol_error};
 
 /// The `EtherType` every `EtherCAT` frame carries.
@@ -135,12 +136,7 @@ impl Datagram {
     /// # Errors
     /// Data that no frame carries.
     pub fn new(command: Command, address: u32, data: &[u8]) -> Result<Self> {
-        if data.len() > DATAGRAM_DATA_MAX {
-            return Err(protocol_error(format!(
-                "{} bytes is over the {DATAGRAM_DATA_MAX} one datagram carries",
-                data.len()
-            )));
-        }
+        ceiling::within(data.len(), DATAGRAM_DATA_MAX, "one datagram carries")?;
         Ok(Self {
             command,
             index: 0,
@@ -194,11 +190,7 @@ pub fn encode(datagrams: &[Datagram]) -> Result<Vec<u8>> {
         .iter()
         .map(|datagram| DATAGRAM_OVERHEAD + datagram.data.len())
         .sum();
-    if length > FRAME_DATA_MAX {
-        return Err(protocol_error(format!(
-            "{length} bytes of datagrams is over the {FRAME_DATA_MAX} one frame carries"
-        )));
-    }
+    ceiling::within(length, FRAME_DATA_MAX, "one frame's datagrams carry")?;
     let mut out = Vec::with_capacity(2 + length);
     let header = u16::try_from(length).unwrap_or(0) | 0x1000;
     out.extend_from_slice(&header.to_le_bytes());

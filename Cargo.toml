@@ -20,6 +20,10 @@ transport = { package = "xmip-core-transport", git = "https://github.com/IlleNil
 # The carrier, declared in architecture.toml: the link, the frame and the
 # loopback every Layer 2 protocol rides on come from ethernet, never copied.
 ethernet = { package = "xmip-core-transport-ethernet", git = "https://github.com/IlleNilsson/xmip-core-transport-ethernet", branch = "main" }
+# CoE is CANopen's application layer in the mailbox (ETG.1000.6 section 5.6):
+# the SDO, its client and its server are the canopen technology's, and only
+# the mailbox and its window are this crate's.
+canopen = { package = "xmip-core-transport-canopen", git = "https://github.com/IlleNilsson/xmip-core-transport-canopen", branch = "main" }
 
 [dev-dependencies]
 # The loopback payloads the tests drive, from the capability's test

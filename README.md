@@ -1,6 +1,6 @@
 # xmip-core-transport-ethercat
 
-EtherCAT transport: IEC 61158 Type 12 over raw Ethernet — datagrams with command, index, address, length and working counter, several to a frame, and a CoE mailbox transfer for a Stream larger than one. A technology of [xmip-core-transport](https://github.com/IlleNilsson/xmip-core-transport).
+EtherCAT transport: IEC 61158 Type 12 over raw Ethernet — datagrams with command, index, address, length and working counter, several to a frame, and a CoE mailbox transfer for a Stream larger than one; the SDO in the mailbox is the canopen technology's. A technology of [xmip-core-transport](https://github.com/IlleNilsson/xmip-core-transport).
 
 ## Toolchain
 
