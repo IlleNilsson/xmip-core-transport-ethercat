@@ -29,17 +29,18 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::{Duration, Instant};
 
+use canopen::sdo::{Sdo, client};
 pub use datagram::{Command, Datagram};
 use ethernet::{Frame, Link, Mac};
-pub use mailbox::{Message, Sdo};
+pub use mailbox::Message;
 pub use slave::{Segment, Slave};
+use transport::arrived::next_arrival;
 use transport::error::{Result, protocol_error};
+use transport::held::Held;
 use transport::loopback::{FarEnd, LOOPBACK_TIMEOUT, Loopback};
 use transport::{Arrived, Directions, Transport};
 
-use crate::mailbox::{
-    INITIATE_DATA, MAILBOX_SIZE, RECEIVE_MAILBOX, SEGMENT_DATA, TRANSMIT_MAILBOX,
-};
+use crate::mailbox::{COE, MAILBOX_SIZE, RECEIVE_MAILBOX, TRANSMIT_MAILBOX};
 use crate::slave::{AL_STATUS, OPERATIONAL};
 
 /// The object a Stream travels as unless a target says otherwise: the
@@ -153,9 +154,10 @@ impl EtherCatTransport {
     ///
     /// # Errors
     /// A station that is not there, not operational, or does not answer.
-    pub fn call(&self, station: u16, sdo: Sdo) -> Result<Sdo> {
+    pub fn call(&self, station: u16, sdo: &Sdo) -> Result<Sdo> {
         let counter = (self.next_index.load(Ordering::Relaxed) & 0x07).max(1);
-        let message = Message { counter, sdo }.encode();
+        let sdo = sdo.clone();
+        let message = Message { counter, sdo }.encode()?;
         let back = self.exchange(vec![
             Datagram::at(Command::Fpwr, station, RECEIVE_MAILBOX, &message)?,
             Datagram::at(Command::Fprd, station, AL_STATUS, &[0; 2])?,
@@ -191,34 +193,7 @@ impl EtherCatTransport {
     /// # Errors
     /// A slave that aborts, answers out of turn, or stops answering.
     pub fn download(&self, station: u16, index: u16, subindex: u8, bytes: &[u8]) -> Result<()> {
-        let first = bytes.len().min(INITIATE_DATA);
-        let open = Sdo::DownloadInitiate {
-            index,
-            subindex,
-            size: u32::try_from(bytes.len())
-                .map_err(|_| protocol_error("over what an SDO sizes"))?,
-            data: bytes[..first].to_vec(),
-        };
-        match self.call(station, open)? {
-            Sdo::DownloadAccepted { .. } => {}
-            other => return Err(unexpected(&other)),
-        }
-        let mut toggle = false;
-        let rest: Vec<&[u8]> = bytes[first..].chunks(SEGMENT_DATA).collect();
-        let total = rest.len();
-        for (n, chunk) in rest.into_iter().enumerate() {
-            let segment = Sdo::DownloadSegment {
-                toggle,
-                data: chunk.to_vec(),
-                last: n + 1 == total,
-            };
-            match self.call(station, segment)? {
-                Sdo::SegmentAccepted { toggle: took } if took == toggle => {}
-                other => return Err(unexpected(&other)),
-            }
-            toggle = !toggle;
-        }
-        Ok(())
+        client::download(&COE, index, subindex, bytes, |sdo| self.call(station, sdo))
     }
 
     /// Read `index:subindex` from `station`.
@@ -226,31 +201,7 @@ impl EtherCatTransport {
     /// # Errors
     /// A slave that aborts, answers out of turn, or stops answering.
     pub fn upload(&self, station: u16, index: u16, subindex: u8) -> Result<Vec<u8>> {
-        let (size, mut bytes) = match self.call(station, Sdo::UploadInitiate { index, subindex })? {
-            Sdo::UploadOpened { size, data, .. } => {
-                (usize::try_from(size).unwrap_or(usize::MAX), data)
-            }
-            other => return Err(unexpected(&other)),
-        };
-        let mut toggle = false;
-        while bytes.len() < size {
-            match self.call(station, Sdo::UploadSegment { toggle })? {
-                Sdo::UploadData {
-                    toggle: got,
-                    data,
-                    last,
-                } if got == toggle => {
-                    bytes.extend_from_slice(&data);
-                    if last {
-                        break;
-                    }
-                }
-                other => return Err(unexpected(&other)),
-            }
-            toggle = !toggle;
-        }
-        bytes.truncate(size);
-        Ok(bytes)
+        client::upload(&COE, index, subindex, |sdo| self.call(station, sdo))
     }
 
     /// The station and object a target names, or the configured ones.
@@ -273,13 +224,6 @@ impl EtherCatTransport {
         let index = hex(parts.next())?;
         let subindex = parts.next().and_then(|n| n.parse().ok()).ok_or_else(bad)?;
         Ok((station, index, subindex))
-    }
-}
-
-fn unexpected(answer: &Sdo) -> transport::TransportError {
-    match answer {
-        Sdo::Abort { code, .. } => protocol_error(format!("the slave aborted with {code:#010x}")),
-        other => protocol_error(format!("the slave answered out of turn: {other:?}")),
     }
 }
 
@@ -325,34 +269,16 @@ impl EtherCatTransport {
     }
 }
 
-/// The slave holding what the master wrote, until it is uploaded back.
-struct Holding {
-    master: EtherCatTransport,
-    address: String,
-}
-
-impl FarEnd for Holding {
-    fn address(&self) -> &str {
-        &self.address
-    }
-
-    fn take_one(self: Box<Self>) -> Result<Arrived> {
-        self.master
-            .receive()?
-            .into_iter()
-            .next()
-            .ok_or_else(|| protocol_error("nothing came back from the slave"))
-    }
-}
-
 /// A Stream of any length travels through the mailbox: the SDO size is
 /// thirty-two bits, and no ceiling below that is a fact of the protocol.
 impl Loopback for EtherCatTransport {
+    /// The slave holding what the master wrote, until it is uploaded back.
     fn far_end(&self) -> Result<Box<dyn FarEnd>> {
-        Ok(Box::new(Holding {
-            master: self.clone(),
-            address: self.origin(self.station, self.index, self.subindex),
-        }))
+        let master = self.clone();
+        Ok(Box::new(Held::new(
+            self.origin(self.station, self.index, self.subindex),
+            move || next_arrival(master.receive()?, "nothing came back from the slave"),
+        )))
     }
 
     fn send_to(&self, address: &str, payload: &[u8]) -> Result<()> {

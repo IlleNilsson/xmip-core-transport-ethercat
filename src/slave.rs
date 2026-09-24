@@ -2,26 +2,25 @@
 //! the far end so a master can be driven without a terminal in the room.
 //!
 //! Not a device. One slave has a station address, an AL status that says
-//! operational, the two mailboxes, and an object dictionary of byte
-//! vectors keyed by index and subindex that `CoE` downloads and uploads
-//! reach. As a frame passes, every datagram passes every slave: a slave
+//! operational, the two mailboxes, and the `CANopen` SDO server
+//! (`canopen::sdo::server`) that `CoE` downloads and uploads reach, over
+//! the [`COE`] window. As a frame passes, every datagram passes every slave: a slave
 //! acts where the datagram addresses it, increments the working counter to
 //! say so, and increments the position of an auto-increment command whether
 //! it acted or not. [`Segment`] is the ring: the frame the master transmits
 //! passes every slave in order and is what the master receives next.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
+use canopen::sdo::server::Server;
+use canopen::sdo::{ABORT_COMMAND, Sdo};
 use ethernet::{Frame, Link};
 use transport::error::Result;
 
 use crate::datagram::{self, Command, Datagram};
-use crate::mailbox::{
-    ABORT_COMMAND, ABORT_NO_OBJECT, ABORT_TOGGLE, INITIATE_DATA, MAILBOX_SIZE, Message,
-    RECEIVE_MAILBOX, SEGMENT_DATA, Sdo, TRANSMIT_MAILBOX,
-};
+use crate::mailbox::{COE, MAILBOX_SIZE, Message, RECEIVE_MAILBOX, TRANSMIT_MAILBOX};
 
 /// The register holding a slave's configured station address.
 pub const STATION_ADDRESS: u16 = 0x0010;
@@ -30,22 +29,11 @@ pub const AL_STATUS: u16 = 0x0130;
 /// The AL status of a slave that is operational.
 pub const OPERATIONAL: u16 = 0x0008;
 
-/// A segmented transfer in progress.
-struct Transfer {
-    index: u16,
-    subindex: u8,
-    toggle: bool,
-    bytes: Vec<u8>,
-    at: usize,
-}
-
 /// One slave.
 pub struct Slave {
     station: u16,
-    dictionary: HashMap<(u16, u8), Vec<u8>>,
+    sdo: Server,
     transmit_mailbox: Option<Vec<u8>>,
-    download: Option<Transfer>,
-    upload: Option<Transfer>,
 }
 
 impl Slave {
@@ -53,21 +41,17 @@ impl Slave {
     /// at `0x1000:00` and nothing else.
     #[must_use]
     pub fn new(station: u16) -> Self {
-        let mut dictionary = HashMap::new();
-        dictionary.insert((0x1000, 0), vec![0, 0, 0, 0]);
         Self {
             station,
-            dictionary,
+            sdo: Server::new(COE),
             transmit_mailbox: None,
-            download: None,
-            upload: None,
         }
     }
 
     /// Hold `bytes` at `index:subindex`.
     #[must_use]
     pub fn with_object(mut self, index: u16, subindex: u8, bytes: impl Into<Vec<u8>>) -> Self {
-        self.dictionary.insert((index, subindex), bytes.into());
+        self.sdo.insert(index, subindex, bytes.into());
         self
     }
 
@@ -80,7 +64,7 @@ impl Slave {
     /// The bytes held at `index:subindex`, as they are now.
     #[must_use]
     pub fn object(&self, index: u16, subindex: u8) -> Option<&[u8]> {
-        self.dictionary.get(&(index, subindex)).map(Vec::as_slice)
+        self.sdo.object(index, subindex)
     }
 
     /// One datagram passes: act where addressed, count, and increment a
@@ -136,128 +120,19 @@ impl Slave {
         let answer = match Message::decode(data) {
             Ok(message) => Message {
                 counter: message.counter,
-                sdo: self.serve(message.sdo),
+                sdo: self.sdo.serve(message.sdo),
             },
             Err(_) => Message {
                 counter: 0,
-                sdo: abort(0, 0, ABORT_COMMAND),
+                sdo: Sdo::Abort {
+                    index: 0,
+                    subindex: 0,
+                    code: ABORT_COMMAND,
+                },
             },
         };
-        self.transmit_mailbox = Some(answer.encode());
+        self.transmit_mailbox = answer.encode().ok();
         true
-    }
-
-    fn serve(&mut self, request: Sdo) -> Sdo {
-        match request {
-            Sdo::DownloadInitiate {
-                index,
-                subindex,
-                size,
-                data,
-            } => self.open_download(index, subindex, size, data),
-            Sdo::DownloadSegment { toggle, data, last } => self.segment(toggle, &data, last),
-            Sdo::UploadInitiate { index, subindex } => self.open_upload(index, subindex),
-            Sdo::UploadSegment { toggle } => self.next_segment(toggle),
-            _ => {
-                self.download = None;
-                self.upload = None;
-                abort(0, 0, ABORT_COMMAND)
-            }
-        }
-    }
-
-    fn open_download(&mut self, index: u16, sub: u8, size: u32, data: Vec<u8>) -> Sdo {
-        if !self.dictionary.contains_key(&(index, sub)) {
-            return abort(index, sub, ABORT_NO_OBJECT);
-        }
-        let whole = usize::try_from(size).unwrap_or(usize::MAX);
-        if data.len() >= whole && data.len() <= INITIATE_DATA {
-            let mut data = data;
-            data.truncate(whole);
-            self.dictionary.insert((index, sub), data);
-        } else {
-            self.download = Some(Transfer {
-                index,
-                subindex: sub,
-                toggle: false,
-                bytes: data,
-                at: 0,
-            });
-        }
-        Sdo::DownloadAccepted {
-            index,
-            subindex: sub,
-        }
-    }
-
-    fn segment(&mut self, toggle: bool, data: &[u8], last: bool) -> Sdo {
-        let Some(transfer) = self.download.as_mut() else {
-            return abort(0, 0, ABORT_COMMAND);
-        };
-        if toggle != transfer.toggle {
-            let (index, sub) = (transfer.index, transfer.subindex);
-            self.download = None;
-            return abort(index, sub, ABORT_TOGGLE);
-        }
-        transfer.toggle = !toggle;
-        transfer.bytes.extend_from_slice(data);
-        if last && let Some(done) = self.download.take() {
-            self.dictionary
-                .insert((done.index, done.subindex), done.bytes);
-        }
-        Sdo::SegmentAccepted { toggle }
-    }
-
-    fn open_upload(&mut self, index: u16, sub: u8) -> Sdo {
-        let Some(bytes) = self.dictionary.get(&(index, sub)).cloned() else {
-            return abort(index, sub, ABORT_NO_OBJECT);
-        };
-        let size = u32::try_from(bytes.len()).unwrap_or(u32::MAX);
-        let first = bytes.len().min(INITIATE_DATA);
-        let data = bytes[..first].to_vec();
-        if first < bytes.len() {
-            self.upload = Some(Transfer {
-                index,
-                subindex: sub,
-                toggle: false,
-                bytes,
-                at: first,
-            });
-        }
-        Sdo::UploadOpened {
-            index,
-            subindex: sub,
-            size,
-            data,
-        }
-    }
-
-    fn next_segment(&mut self, toggle: bool) -> Sdo {
-        let Some(transfer) = self.upload.as_mut() else {
-            return abort(0, 0, ABORT_COMMAND);
-        };
-        if toggle != transfer.toggle {
-            let (index, sub) = (transfer.index, transfer.subindex);
-            self.upload = None;
-            return abort(index, sub, ABORT_TOGGLE);
-        }
-        transfer.toggle = !toggle;
-        let end = (transfer.at + SEGMENT_DATA).min(transfer.bytes.len());
-        let data = transfer.bytes[transfer.at..end].to_vec();
-        transfer.at = end;
-        let last = end == transfer.bytes.len();
-        if last {
-            self.upload = None;
-        }
-        Sdo::UploadData { toggle, data, last }
-    }
-}
-
-const fn abort(index: u16, subindex: u8, code: u32) -> Sdo {
-    Sdo::Abort {
-        index,
-        subindex,
-        code,
     }
 }
 
@@ -331,6 +206,7 @@ impl Link for Segment {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use canopen::sdo::Opening;
     use ethernet::Mac;
 
     fn pass(segment: &Segment, datagrams: &[Datagram]) -> Vec<Datagram> {
@@ -392,14 +268,20 @@ mod tests {
         assert_eq!(empty[0].working_counter, 0, "nothing to read yet");
         let ask = Message {
             counter: 1,
-            sdo: Sdo::UploadInitiate {
+            sdo: Sdo::InitiateUpload {
                 index: 0x1000,
                 subindex: 0,
             },
         };
         let written = pass(
             &segment,
-            &[Datagram::at(Command::Fpwr, 0x1001, RECEIVE_MAILBOX, &ask.encode()).expect("fpwr")],
+            &[Datagram::at(
+                Command::Fpwr,
+                0x1001,
+                RECEIVE_MAILBOX,
+                &ask.encode().expect("encode"),
+            )
+            .expect("fpwr")],
         );
         assert_eq!(written[0].working_counter, 1);
         let answer = pass(
@@ -417,8 +299,10 @@ mod tests {
                 sdo: Sdo::UploadOpened {
                     index: 0x1000,
                     subindex: 0,
-                    size: 4,
-                    data: vec![0; 4],
+                    opening: Opening::Sized {
+                        size: 4,
+                        data: vec![0; 4],
+                    },
                 },
             }
         );
