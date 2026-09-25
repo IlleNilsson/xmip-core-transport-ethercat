@@ -285,12 +285,10 @@ impl Loopback for EtherCatTransport {
         self.send(address, payload)
     }
 
-    fn unblock(&self, _address: &str) {}
-
     /// In order on one thread: the ring answers as the master transmits, so
     /// the download goes first and the upload reads it back.
-    fn round(&self, payload: &[u8]) -> Result<Arrived> {
-        self.round_in_order(payload)
+    fn exchanges_in_order(&self) -> bool {
+        true
     }
 }
 
