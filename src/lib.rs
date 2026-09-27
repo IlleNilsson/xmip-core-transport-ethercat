@@ -38,7 +38,8 @@ use transport::arrived::next_arrival;
 use transport::error::{Result, protocol_error};
 use transport::held::Held;
 use transport::loopback::{FarEnd, LOOPBACK_TIMEOUT, Loopback};
-use transport::{Arrived, Directions, Transport};
+use transport::{Arrived, Configured, Directions, Transport};
+use xcore::settings::{Applies, Fixed, Kind, Presence, Read, Setting, Settings};
 
 use crate::mailbox::{COE, MAILBOX_SIZE, RECEIVE_MAILBOX, TRANSMIT_MAILBOX};
 use crate::slave::{AL_STATUS, OPERATIONAL};
@@ -46,6 +47,10 @@ use crate::slave::{AL_STATUS, OPERATIONAL};
 /// The object a Stream travels as unless a target says otherwise: the
 /// first manufacturer-specific index.
 pub const STREAM_OBJECT: (u16, u8) = (0x2000, 0);
+
+/// How long a ring that stops answering is waited on when a Location says
+/// nothing else.
+pub const TIMEOUT: Duration = Duration::from_secs(1);
 
 /// The station the loopback's one slave is configured at.
 pub const LOOPBACK_STATION: u16 = 0x1001;
@@ -73,7 +78,7 @@ impl EtherCatTransport {
             station,
             index: STREAM_OBJECT.0,
             subindex: STREAM_OBJECT.1,
-            timeout: Duration::from_secs(1),
+            timeout: TIMEOUT,
             next_index: Arc::new(AtomicU8::new(0)),
         }
     }
@@ -252,6 +257,77 @@ impl Transport for EtherCatTransport {
     }
 }
 
+impl Configured for EtherCatTransport {
+    /// The address is the Ethernet link the ring hangs off, by its name.
+    /// This build carries the in-process link only, `loopback`, as the
+    /// ethernet technology does; every other name is refused until a node
+    /// implements a raw-socket link.
+    const SETTINGS: &'static Settings = &Settings {
+        technology: env!("CARGO_PKG_NAME"),
+        settings: &[
+            Setting {
+                name: "source",
+                kind: Kind::Address,
+                presence: Presence::Required,
+                meaning: "The MAC address the master's frames are sent from.",
+                applies: Applies::Both,
+            },
+            Setting {
+                name: "station",
+                kind: Kind::Integer {
+                    minimum: 0,
+                    maximum: 0xffff,
+                },
+                presence: Presence::Required,
+                meaning: "The configured station address of the slave a Location reads or \
+                          writes.",
+                applies: Applies::Both,
+            },
+            Setting {
+                name: "index",
+                kind: Kind::Integer {
+                    minimum: 0,
+                    maximum: 0xffff,
+                },
+                presence: Presence::Default(Fixed::Integer(STREAM_OBJECT.0 as i64)),
+                meaning: "The object's index in the slave's dictionary.",
+                applies: Applies::Both,
+            },
+            Setting {
+                name: "subindex",
+                kind: Kind::Integer {
+                    minimum: 0,
+                    maximum: 255,
+                },
+                presence: Presence::Default(Fixed::Integer(STREAM_OBJECT.1 as i64)),
+                meaning: "The object's subindex under its index.",
+                applies: Applies::Both,
+            },
+            Setting {
+                name: "timeout",
+                kind: Kind::Duration,
+                presence: Presence::Default(Fixed::Duration(TIMEOUT)),
+                meaning: "How long a ring or a mailbox that stops answering is waited on.",
+                applies: Applies::Both,
+            },
+        ],
+    };
+
+    fn configured(address: &str, settings: &Read) -> Result<Self> {
+        let link = ethernet::open_link(address)?;
+        let source: Mac = settings.text("source").parse()?;
+        let out_of_range = |name: &str| protocol_error(format!("{name} out of range"));
+        let station =
+            u16::try_from(settings.integer("station")).map_err(|_| out_of_range("station"))?;
+        let index = u16::try_from(settings.integer("index")).map_err(|_| out_of_range("index"))?;
+        let subindex =
+            u8::try_from(settings.integer("subindex")).map_err(|_| out_of_range("subindex"))?;
+        Ok(Self::new(link, source, station)
+            .about(index, subindex)
+            .timing_out_after(settings.duration("timeout")))
+    }
+}
+
 impl EtherCatTransport {
     /// Both ends on one in-process ring: a master and one slave at
     /// [`LOOPBACK_STATION`], operational, the Stream object empty, the
@@ -296,6 +372,34 @@ impl Loopback for EtherCatTransport {
 mod tests {
     use super::*;
     use transport::payload::edge_payloads;
+    use xcore::settings::Given;
+
+    #[test]
+    fn ethercat_declares_its_settings_and_reads_through_them() {
+        assert_eq!(EtherCatTransport::SETTINGS.problems(), Vec::<String>::new());
+        let given = [
+            (
+                "source".to_string(),
+                Given::Text("02:00:00:00:00:01".to_string()),
+            ),
+            ("station".to_string(), Given::Integer(0x1001)),
+            ("subindex".to_string(), Given::Integer(2)),
+        ];
+        let built = EtherCatTransport::open("loopback", Applies::Receive, &given).expect("built");
+        assert_eq!(built.source, Mac([0x02, 0, 0, 0, 0, 1]));
+        assert_eq!(built.station, 0x1001);
+        assert_eq!((built.index, built.subindex), (STREAM_OBJECT.0, 2));
+        assert_eq!(built.timeout, TIMEOUT);
+        assert!(EtherCatTransport::open("eth0", Applies::Send, &given).is_err());
+        let Err(refused) = EtherCatTransport::open("loopback", Applies::Send, &given[..1]) else {
+            panic!("station is required");
+        };
+        assert!(
+            refused.message.contains("\"station\""),
+            "{}",
+            refused.message
+        );
+    }
 
     #[test]
     fn a_loopback_round_downloads_through_the_mailbox_and_uploads_back() {
