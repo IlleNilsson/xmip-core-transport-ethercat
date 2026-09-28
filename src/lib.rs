@@ -30,9 +30,11 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::{Duration, Instant};
 
 use canopen::sdo::{Sdo, client};
+use codec::hex::prefixed_number;
 pub use datagram::{Command, Datagram};
 use ethernet::{Frame, Link, Mac};
 pub use mailbox::Message;
+use net::Target;
 pub use slave::{Segment, Slave};
 use transport::arrived::next_arrival;
 use transport::error::{Result, protocol_error};
@@ -53,7 +55,7 @@ pub const STREAM_OBJECT: (u16, u8) = (0x2000, 0);
 pub const TIMEOUT: Duration = Duration::from_secs(1);
 
 /// The station the loopback's one slave is configured at.
-pub const LOOPBACK_STATION: u16 = 0x1001;
+const LOOPBACK_STATION: u16 = 0x1001;
 
 /// The master's side of one link, addressing one station's one object.
 #[derive(Clone)]
@@ -211,7 +213,9 @@ impl EtherCatTransport {
 
     /// The station and object a target names, or the configured ones.
     fn resolve(&self, target: &str) -> Result<(u16, u16, u8)> {
-        let path = match transport::socket::target("ethercat", target) {
+        let path = match Target::under(&["ethercat"], target)
+            .map(|named| (named.authority(), named.path()))
+        {
             Some((_, path)) => path,
             None => target,
         };
@@ -220,8 +224,7 @@ impl EtherCatTransport {
         }
         let bad = || protocol_error(format!("{target:?} is not 0x<station>/0x<index>/<sub>"));
         let hex = |part: Option<&str>| {
-            part.and_then(|hex| hex.strip_prefix("0x"))
-                .and_then(|hex| u16::from_str_radix(hex, 16).ok())
+            part.and_then(|hex| prefixed_number(hex).ok())
                 .ok_or_else(bad)
         };
         let mut parts = path.split('/');
