@@ -9,21 +9,21 @@
 //! offset into that slave's memory; for a logical command it is thirty-two
 //! bits into the memory the fieldbus memory management units map.
 
-use transport::ceiling;
+use net::ceiling;
 use transport::error::{Result, protocol_error};
 
 /// The `EtherType` every `EtherCAT` frame carries.
 pub const ETHERTYPE: u16 = 0x88a4;
 
 /// What one standard frame carries after the `EtherCAT` header.
-pub const FRAME_DATA_MAX: usize = ethernet::MTU - 2;
+const FRAME_DATA_MAX: usize = ethernet::MTU - 2;
 
 /// The command, index, address, length and interrupt bytes before the data,
 /// and the working counter after it.
-pub const DATAGRAM_OVERHEAD: usize = 12;
+const DATAGRAM_OVERHEAD: usize = 12;
 
 /// The data one datagram carries when it is alone in a standard frame.
-pub const DATAGRAM_DATA_MAX: usize = FRAME_DATA_MAX - DATAGRAM_OVERHEAD;
+const DATAGRAM_DATA_MAX: usize = FRAME_DATA_MAX - DATAGRAM_OVERHEAD;
 
 /// The eleven bits a length field has.
 const LENGTH_MASK: u16 = 0x07ff;

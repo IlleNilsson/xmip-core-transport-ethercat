@@ -23,7 +23,7 @@ use crate::datagram::{self, Command, Datagram};
 use crate::mailbox::{COE, MAILBOX_SIZE, Message, RECEIVE_MAILBOX, TRANSMIT_MAILBOX};
 
 /// The register holding a slave's configured station address.
-pub const STATION_ADDRESS: u16 = 0x0010;
+const STATION_ADDRESS: u16 = 0x0010;
 /// The register holding a slave's application layer status.
 pub const AL_STATUS: u16 = 0x0130;
 /// The AL status of a slave that is operational.

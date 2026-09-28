@@ -29,7 +29,7 @@ const INITIATE_OVERHEAD: usize = 6 + 2 + 8;
 const SEGMENT_OVERHEAD: usize = 6 + 2 + 1;
 
 /// The data an initiate carries beside its size.
-pub const INITIATE_DATA: usize = MAILBOX_SIZE - INITIATE_OVERHEAD;
+const INITIATE_DATA: usize = MAILBOX_SIZE - INITIATE_OVERHEAD;
 /// The data a segment carries.
 pub const SEGMENT_DATA: usize = MAILBOX_SIZE - SEGMENT_OVERHEAD;
 
