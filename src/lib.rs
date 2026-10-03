@@ -17,6 +17,10 @@
 //! [`Link`] and [`Frame`] under `EtherType` `0x88a4` rather than knowing a
 //! wire of its own.
 //!
+//! **A receive is a `CoE` upload, which consumes nothing at the slave**,
+//! so its verdict has nothing to tell it, whichever it is: a cycle that did
+//! not complete loses nothing, and the next upload reads the object again.
+//!
 //! The origin URI names the link, the station and the object:
 //! `ethercat://<link>/0x1001/0x2000/0`. A target is the same, or a bare
 //! `0x<station>/0x<index>/<sub>`, or nothing for the configured object.
@@ -40,7 +44,7 @@ use transport::arrived::next_arrival;
 use transport::error::{Result, protocol_error};
 use transport::held::Held;
 use transport::loopback::{FarEnd, LOOPBACK_TIMEOUT, Loopback};
-use transport::{Arrived, Configured, Directions, Transport};
+use transport::{Acknowledgement, Arrived, Configured, Directions, Transport};
 use xcore::settings::{Applies, Fixed, Kind, Presence, Read, Setting, Settings};
 
 use crate::mailbox::{COE, MAILBOX_SIZE, RECEIVE_MAILBOX, TRANSMIT_MAILBOX};
@@ -244,12 +248,20 @@ impl Transport for EtherCatTransport {
         Directions::BOTH
     }
 
-    /// One upload of the object: its bytes as one Stream.
+    fn arrivals(&self) -> transport::Arrivals {
+        transport::Arrivals::Ordered("a poll reads again what is not yet told")
+    }
+
+    /// One upload of the object: its bytes as one Stream, whole. The
+    /// verdict has nothing to tell the slave, whichever it is: a `CoE`
+    /// upload consumes nothing, so a cycle that did not complete loses
+    /// nothing — the next upload reads the object again.
     fn receive(&self) -> Result<Vec<Arrived>> {
         let bytes = self.upload(self.station, self.index, self.subindex)?;
-        Ok(vec![Arrived::new(
+        Ok(vec![Arrived::whole(
             self.origin(self.station, self.index, self.subindex),
             bytes,
+            Acknowledgement::unconsumed(),
         )])
     }
 
@@ -356,7 +368,7 @@ impl Loopback for EtherCatTransport {
         let master = self.clone();
         Ok(Box::new(Held::new(
             self.origin(self.station, self.index, self.subindex),
-            move || next_arrival(master.receive()?, "nothing came back from the slave"),
+            move || next_arrival(master.receive()?, "nothing came back from the slave")?.taken(),
         )))
     }
 
@@ -455,10 +467,16 @@ mod tests {
         master
             .send("0x1001/0x1000/0", &[7, 0, 0, 0])
             .expect("bare target");
-        assert_eq!(
-            master.clone().about(0x1000, 0).receive().expect("upload")[0].bytes,
-            [7, 0, 0, 0]
+        let reading = master.clone().about(0x1000, 0);
+        let upload = reading.receive().expect("upload").remove(0);
+        assert!(
+            upload.defers(),
+            "an upload consumes nothing: nothing to lose"
         );
+        // A refused cycle loses nothing: the next upload reads it again.
+        upload.failed().expect("refused");
+        let again = reading.receive().expect("again").remove(0);
+        assert_eq!(again.taken().expect("taken").bytes, [7, 0, 0, 0]);
         let error = master.send("", b"x").expect_err("no such object on 0x1001");
         assert!(error.message.contains("0x06020000"), "{error}");
         let error = master
