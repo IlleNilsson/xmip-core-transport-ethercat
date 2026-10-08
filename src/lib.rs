@@ -35,11 +35,13 @@ use std::time::{Duration, Instant};
 
 use canopen::sdo::{Sdo, client};
 use codec::hex::prefixed_number;
+use context::property::ETHERCAT_STATION_ADDRESS;
 pub use datagram::{Command, Datagram};
 use ethernet::{Frame, Link, Mac};
 pub use mailbox::Message;
 use net::Target;
 pub use slave::{Segment, Slave};
+use transport::ArrivalIdentity;
 use transport::arrived::next_arrival;
 use transport::error::{Result, protocol_error};
 use transport::held::Held;
@@ -258,11 +260,15 @@ impl Transport for EtherCatTransport {
     /// nothing — the next upload reads the object again.
     fn receive(&self) -> Result<Vec<Arrived>> {
         let bytes = self.upload(self.station, self.index, self.subindex)?;
-        Ok(vec![Arrived::whole(
-            self.origin(self.station, self.index, self.subindex),
-            bytes,
-            Acknowledgement::unconsumed(),
-        )])
+        Ok(vec![
+            Arrived::whole(
+                self.origin(self.station, self.index, self.subindex),
+                bytes,
+                Acknowledgement::unconsumed(),
+            )
+            .scheduled()
+            .observing(ETHERCAT_STATION_ADDRESS, format!("{:#06x}", self.station)),
+        ])
     }
 
     /// One download of `bytes` to the object `target` names.
@@ -363,6 +369,10 @@ impl EtherCatTransport {
 /// A Stream of any length travels through the mailbox: the SDO size is
 /// thirty-two bits, and no ceiling below that is a fact of the protocol.
 impl Loopback for EtherCatTransport {
+    fn arrival_identity(&self) -> ArrivalIdentity {
+        ArrivalIdentity::Named(&[context::property::ETHERCAT_STATION_ADDRESS])
+    }
+
     /// The slave holding what the master wrote, until it is uploaded back.
     fn far_end(&self) -> Result<Box<dyn FarEnd>> {
         let master = self.clone();
