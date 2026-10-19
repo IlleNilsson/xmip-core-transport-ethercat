@@ -27,6 +27,7 @@
 
 pub mod datagram;
 pub mod mailbox;
+mod settings;
 pub mod slave;
 
 use std::sync::Arc;
@@ -46,8 +47,7 @@ use transport::arrived::next_arrival;
 use transport::error::{Result, protocol_error};
 use transport::held::Held;
 use transport::loopback::{FarEnd, LOOPBACK_TIMEOUT, Loopback};
-use transport::{Acknowledgement, Arrived, Configured, Directions, Transport};
-use xcore::settings::{Applies, Fixed, Kind, Presence, Read, Setting, Settings};
+use transport::{Acknowledgement, Arrived, Directions, Transport};
 
 use crate::mailbox::{COE, MAILBOX_SIZE, RECEIVE_MAILBOX, TRANSMIT_MAILBOX};
 use crate::slave::{AL_STATUS, OPERATIONAL};
@@ -262,7 +262,7 @@ impl Transport for EtherCatTransport {
     /// verdict has nothing to tell the slave, whichever it is: a `CoE`
     /// upload consumes nothing, so a cycle that did not complete loses
     /// nothing — the next upload reads the object again.
-    fn receive(&self) -> Result<Vec<Arrived>> {
+    fn receive_up_to(&self, _most: usize) -> Result<Vec<Arrived>> {
         let bytes = self.upload(self.station, self.index, self.subindex)?;
         Ok(vec![
             Arrived::whole(
@@ -275,81 +275,15 @@ impl Transport for EtherCatTransport {
         ])
     }
 
+    fn sending(&self) -> transport::Sending {
+        transport::Sending::Gathered("one CoE SDO download carries the whole object")
+    }
+
     /// One download of `bytes` to the object `target` names.
-    fn send(&self, target: &str, bytes: &[u8]) -> Result<()> {
+    fn send_from(&self, target: &str, outgoing: transport::Outgoing<'_>) -> Result<()> {
+        let bytes: &[u8] = &outgoing.gather()?;
         let (station, index, subindex) = self.resolve(target)?;
         self.download(station, index, subindex, bytes)
-    }
-}
-
-impl Configured for EtherCatTransport {
-    /// The address is the Ethernet link the ring hangs off, by its name.
-    /// This build carries the in-process link only, `loopback`, as the
-    /// ethernet technology does; every other name is refused until a node
-    /// implements a raw-socket link.
-    const SETTINGS: &'static Settings = &Settings {
-        technology: env!("CARGO_PKG_NAME"),
-        settings: &[
-            Setting {
-                name: "source",
-                kind: Kind::Address,
-                presence: Presence::Required,
-                meaning: "The MAC address the master's frames are sent from.",
-                applies: Applies::Both,
-            },
-            Setting {
-                name: "station",
-                kind: Kind::Integer {
-                    minimum: 0,
-                    maximum: 0xffff,
-                },
-                presence: Presence::Required,
-                meaning: "The configured station address of the slave a Location reads or \
-                          writes.",
-                applies: Applies::Both,
-            },
-            Setting {
-                name: "index",
-                kind: Kind::Integer {
-                    minimum: 0,
-                    maximum: 0xffff,
-                },
-                presence: Presence::Default(Fixed::Integer(STREAM_OBJECT.0 as i64)),
-                meaning: "The object's index in the slave's dictionary.",
-                applies: Applies::Both,
-            },
-            Setting {
-                name: "subindex",
-                kind: Kind::Integer {
-                    minimum: 0,
-                    maximum: 255,
-                },
-                presence: Presence::Default(Fixed::Integer(STREAM_OBJECT.1 as i64)),
-                meaning: "The object's subindex under its index.",
-                applies: Applies::Both,
-            },
-            Setting {
-                name: "timeout",
-                kind: Kind::Duration,
-                presence: Presence::Default(Fixed::Duration(TIMEOUT)),
-                meaning: "How long a ring or a mailbox that stops answering is waited on.",
-                applies: Applies::Both,
-            },
-        ],
-    };
-
-    fn configured(address: &str, settings: &Read) -> Result<Self> {
-        let link = ethernet::open_link(address)?;
-        let source: Mac = settings.text("source").parse()?;
-        let out_of_range = |name: &str| protocol_error(format!("{name} out of range"));
-        let station =
-            u16::try_from(settings.integer("station")).map_err(|_| out_of_range("station"))?;
-        let index = u16::try_from(settings.integer("index")).map_err(|_| out_of_range("index"))?;
-        let subindex =
-            u8::try_from(settings.integer("subindex")).map_err(|_| out_of_range("subindex"))?;
-        Ok(Self::new(link, source, station)
-            .about(index, subindex)
-            .timing_out_after(settings.duration("timeout")))
     }
 }
 
@@ -400,7 +334,9 @@ impl Loopback for EtherCatTransport {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use transport::Configured;
     use transport::payload::edge_payloads;
+    use xcore::settings::Applies;
     use xcore::settings::Given;
 
     #[test]
