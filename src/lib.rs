@@ -47,7 +47,7 @@ use transport::arrived::next_arrival;
 use transport::error::{Result, protocol_error};
 use transport::held::Held;
 use transport::loopback::{FarEnd, LOOPBACK_TIMEOUT, Loopback};
-use transport::{Acknowledgement, Arrived, Directions, Transport};
+use transport::{Acknowledgement, Arrived, Configured, Directions, Transport};
 
 use crate::mailbox::{COE, MAILBOX_SIZE, RECEIVE_MAILBOX, TRANSMIT_MAILBOX};
 use crate::slave::{AL_STATUS, OPERATIONAL};
@@ -219,7 +219,7 @@ impl EtherCatTransport {
 
     /// The station and object a target names, or the configured ones.
     fn resolve(&self, target: &str) -> Result<(u16, u16, u8)> {
-        let path = match Target::under(&["ethercat"], target)
+        let path = match Target::under(Self::SCHEMES, target)
             .map(|named| (named.authority(), named.path()))
         {
             Some((_, path)) => path,
