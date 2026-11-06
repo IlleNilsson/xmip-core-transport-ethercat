@@ -11,8 +11,9 @@
 //! passes every slave in order and is what the master receives next.
 
 use std::collections::VecDeque;
-use std::sync::{Mutex, PoisonError};
+use std::sync::Mutex;
 use std::time::Duration;
+use xcore::lock::Locked;
 
 use canopen::sdo::server::Server;
 use canopen::sdo::{ABORT_COMMAND, Sdo};
@@ -155,8 +156,7 @@ impl Segment {
     /// Look at the slave at `station`, where there is one.
     pub fn with_slave<R>(&self, station: u16, look: impl FnOnce(&Slave) -> R) -> Option<R> {
         self.slaves
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .locked()
             .iter()
             .find(|slave| slave.station == station)
             .map(look)
@@ -169,11 +169,7 @@ impl Link for Segment {
     }
 
     fn receive(&self, _timeout: Duration) -> Result<Option<Frame>> {
-        Ok(self
-            .to_master
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .pop_front())
+        Ok(self.to_master.locked().pop_front())
     }
 
     /// A frame that is not `EtherCAT`, or not well formed, is dropped the
@@ -186,7 +182,7 @@ impl Link for Segment {
             return Ok(());
         };
         {
-            let mut slaves = self.slaves.lock().unwrap_or_else(PoisonError::into_inner);
+            let mut slaves = self.slaves.locked();
             for datagram in &mut datagrams {
                 for slave in slaves.iter_mut() {
                     slave.pass(datagram);
@@ -195,10 +191,7 @@ impl Link for Segment {
         }
         let payload = datagram::encode(&datagrams)?;
         let back = Frame::new(frame.source, frame.destination, frame.ethertype, &payload)?;
-        self.to_master
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .push_back(back);
+        self.to_master.locked().push_back(back);
         Ok(())
     }
 }
