@@ -201,6 +201,7 @@ mod tests {
     use super::*;
     use canopen::sdo::Opening;
     use ethernet::Mac;
+    use std::assert_matches;
 
     fn pass(segment: &Segment, datagrams: &[Datagram]) -> Vec<Datagram> {
         let payload = datagram::encode(datagrams).expect("encode");
@@ -307,13 +308,13 @@ mod tests {
                     .expect("fprd"),
             ],
         );
-        assert!(matches!(
+        assert_matches!(
             Message::decode(&garbage[1].data).expect("abort").sdo,
             Sdo::Abort {
                 code: ABORT_COMMAND,
                 ..
             }
-        ));
+        );
         let frame =
             Frame::new(Mac::BROADCAST, Mac([2, 0, 0, 0, 0, 1]), 0x0800, &[0x45]).expect("ip");
         segment.transmit(&frame).expect("dropped");
