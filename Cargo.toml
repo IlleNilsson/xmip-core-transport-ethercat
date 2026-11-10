@@ -28,7 +28,7 @@ net = { package = "xmip-core-library-net", git = "https://github.com/IlleNilsson
 # The settings this technology declares (xcore::settings), read through
 # transport::Configured (ADR-0064, amendment 2026-09-26).
 xcore = { package = "xmip-core", git = "https://github.com/IlleNilsson/xmip-core", branch = "main" }
-# The carrier, declared in architecture.xmip: the link, the frame and the
+# The carrier, declared in architecture.toml: the link, the frame and the
 # loopback every Layer 2 protocol rides on come from ethernet, never copied.
 ethernet = { package = "xmip-core-transport-ethernet", git = "https://github.com/IlleNilsson/xmip-core-transport-ethernet", branch = "main" }
 # CoE is CANopen's application layer in the mailbox (ETG.1000.6 section 5.6):
