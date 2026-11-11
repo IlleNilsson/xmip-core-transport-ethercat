@@ -67,6 +67,12 @@ impl Configured for EtherCatTransport {
     /// The schemes a Location's address is entered with to choose this technology.
     const SCHEMES: &'static [&'static str] = &["ethercat"];
 
+    /// The station, index and subindex settings: the address names only the
+    /// link.
+    fn own_target(_address: &str) -> &str {
+        transport::destination::OWN
+    }
+
     fn configured(address: &str, settings: &Read) -> Result<Self> {
         let link = ethernet::open_link(address)?;
         let source: Mac = settings.text("source").parse()?;

@@ -225,9 +225,9 @@ impl EtherCatTransport {
             Some((_, path)) => path,
             None => target,
         };
-        if path.is_empty() {
+        let Some(path) = transport::destination::named(path) else {
             return Ok((self.station, self.index, self.subindex));
-        }
+        };
         let bad = || protocol_error(format!("{target:?} is not 0x<station>/0x<index>/<sub>"));
         let hex = |part: Option<&str>| {
             part.and_then(|hex| prefixed_number(hex).ok())
@@ -338,6 +338,40 @@ mod tests {
     use transport::payload::edge_payloads;
     use xcore::settings::Applies;
     use xcore::settings::Given;
+
+    #[test]
+    fn a_send_location_downloads_to_its_object_and_a_target_naming_another_wins() {
+        let given = [
+            (
+                "source".to_string(),
+                Given::Text("02:00:00:00:00:01".to_string()),
+            ),
+            ("station".to_string(), Given::Integer(0x1001)),
+            ("index".to_string(), Given::Integer(0x6000)),
+        ];
+        let location = "ethercat://loopback";
+        let mut near = EtherCatTransport::open(location, Applies::Send, &given).expect("built");
+        // The `loopback` link opens a ring of its own with no slave on it:
+        // the master the Location built goes on the far slave's ring.
+        let slave = Slave::new(0x1001)
+            .with_object(0x6000, 0, Vec::new())
+            .with_object(0x2000, 1, Vec::new());
+        let ring = Arc::new(Segment::new(vec![slave]));
+        near.link = Arc::clone(&ring) as Arc<dyn Link>;
+        near.send(EtherCatTransport::own_target(location), b"own object")
+            .expect("its own");
+        near.send("0x1001/0x2000/1", b"other").expect("another");
+        let held = |index, subindex| {
+            ring.with_slave(0x1001, |slave| {
+                slave.object(index, subindex).map(<[u8]>::to_vec)
+            })
+            .flatten()
+        };
+        assert_eq!(held(0x6000, 0).as_deref(), Some(&b"own object"[..]));
+        assert_eq!(held(0x2000, 1).as_deref(), Some(&b"other"[..]));
+        let other = near.resolve("0x1002/0x2000/1").expect("another station");
+        assert_eq!(other, (0x1002, 0x2000, 1));
+    }
 
     #[test]
     fn ethercat_declares_its_settings_and_reads_through_them() {
