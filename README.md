@@ -4,6 +4,8 @@ EtherCAT transport: IEC 61158 Type 12 over raw Ethernet — datagrams with comma
 
 A send target is read by `net::Target` in [xmip-core-library-net](https://github.com/IlleNilsson/xmip-core-library-net), the one reading of a URI every technology calls: scheme, authority, path and decoded query. Until 2026-09-28 it was read through the transport capability's `socket::target`, which split it on its first slash and left the query in the path.
 
+A Send Location downloads to the object its `station`, `index` and `subindex` settings name, on the link its address names: it sends to the empty target (`Configured::own_target`, `transport::destination::OWN`), which it reads, through `transport::destination::named`, as that object. A target naming another still wins — `0x1002/0x2000/1` (ADR-0064, amendment 2026-11-10).
+
 A `0x` number in a target is read by `codec::hex::prefixed_number` in [xmip-core-library-codec](https://github.com/IlleNilsson/xmip-core-library-codec), which refuses a sign; until 2026-09-28 it was read with `from_str_radix`, which took `0x+7e8`.
 
 ## Acknowledgement
