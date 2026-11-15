@@ -54,13 +54,11 @@ impl Configured for EtherCatTransport {
                 meaning: "The object's subindex under its index.",
                 applies: Applies::Both,
             },
-            Setting {
-                name: "timeout",
-                kind: Kind::Duration,
-                presence: Presence::Default(Fixed::Duration(TIMEOUT)),
-                meaning: "How long a ring or a mailbox that stops answering is waited on.",
-                applies: Applies::Both,
-            },
+            transport::configured::timeout(
+                Applies::Both,
+                Some(TIMEOUT),
+                "How long a ring or a mailbox that stops answering is waited on.",
+            ),
         ],
     };
 
@@ -73,6 +71,10 @@ impl Configured for EtherCatTransport {
         transport::destination::OWN
     }
 
+    fn timeout_kept(&mut self) -> Option<&mut dyn transport::configured::TimeoutKept> {
+        Some(&mut self.timeout)
+    }
+
     fn configured(address: &str, settings: &Read) -> Result<Self> {
         let link = ethernet::open_link(address)?;
         let source: Mac = settings.text("source").parse()?;
@@ -82,8 +84,6 @@ impl Configured for EtherCatTransport {
         let index = u16::try_from(settings.integer("index")).map_err(|_| out_of_range("index"))?;
         let subindex =
             u8::try_from(settings.integer("subindex")).map_err(|_| out_of_range("subindex"))?;
-        Ok(Self::new(link, source, station)
-            .about(index, subindex)
-            .timing_out_after(settings.duration("timeout")))
+        Ok(Self::new(link, source, station).about(index, subindex))
     }
 }

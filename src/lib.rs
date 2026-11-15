@@ -99,13 +99,6 @@ impl EtherCatTransport {
         self
     }
 
-    /// Give up on a ring that stops answering.
-    #[must_use]
-    pub const fn timing_out_after(mut self, timeout: Duration) -> Self {
-        self.timeout = timeout;
-        self
-    }
-
     /// `ethercat://<link>/0x<station>/0x<index>/<sub>`.
     #[must_use]
     pub fn origin(&self, station: u16, index: u16, subindex: u8) -> String {
