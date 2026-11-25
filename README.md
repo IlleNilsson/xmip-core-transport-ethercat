@@ -8,6 +8,8 @@ A Send Location downloads to the object its `station`, `index` and `subindex` se
 
 A `0x` number in a target is read by `codec::hex::prefixed_number` in [xmip-core-library-codec](https://github.com/IlleNilsson/xmip-core-library-codec), which refuses a sign; until 2026-09-28 it was read with `from_str_radix`, which took `0x+7e8`.
 
+The link is ethernet's (`ethernet::open_link`): an interface's raw socket on Linux, as the root's service test proves a Send Location on a veth pair whose far end is a ring of this crate's slaves (2026-11-25). A slave says when nothing waits in its transmit mailbox for the master to read (`Slave::idle`), so a ring at the far end of a wire knows a download is answered whole.
+
 ## Acknowledgement
 
 A receive is a CoE upload of the object through the slave's mailbox, which

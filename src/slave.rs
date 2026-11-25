@@ -68,6 +68,14 @@ impl Slave {
         self.sdo.object(index, subindex)
     }
 
+    /// Whether nothing waits in the slave's transmit mailbox for the master
+    /// to read: between two mailbox exchanges, as a slave on a wire is once
+    /// its master has read the answer to its last request.
+    #[must_use]
+    pub const fn idle(&self) -> bool {
+        self.transmit_mailbox.is_none()
+    }
+
     /// One datagram passes: act where addressed, count, and increment a
     /// position.
     pub fn pass(&mut self, datagram: &mut Datagram) {
@@ -278,6 +286,7 @@ mod tests {
             .expect("fpwr")],
         );
         assert_eq!(written[0].working_counter, 1);
+        assert_eq!(segment.with_slave(0x1001, Slave::idle), Some(false));
         let answer = pass(
             &segment,
             &[
@@ -286,6 +295,11 @@ mod tests {
             ],
         );
         assert_eq!(answer[0].working_counter, 1);
+        assert_eq!(
+            segment.with_slave(0x1001, Slave::idle),
+            Some(true),
+            "its answer read"
+        );
         assert_eq!(
             Message::decode(&answer[0].data).expect("message"),
             Message {
