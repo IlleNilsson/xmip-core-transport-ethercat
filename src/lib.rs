@@ -24,46 +24,76 @@
 //! The origin URI names the link, the station and the object:
 //! `ethercat://<link>/0x1001/0x2000/0`. A target is the same, or a bare
 //! `0x<station>/0x<index>/<sub>`, or nothing for the configured object.
+//!
+//! **Built with its `declaration` feature alone** the crate is
+//! [`declaration`], what a Location of it is configured with, and none of
+//! the code above, which is behind the default feature: what the surfaces'
+//! library carries (ADR-0064, amendment 2026-11-26). The object a Stream
+//! travels as and the wait a Location takes unless it says, `STREAM_OBJECT`
+//! and `TIMEOUT`, are declared there with it.
 
+#[cfg(feature = "default")]
+mod configured;
+#[cfg(feature = "default")]
 pub mod datagram;
+#[cfg(feature = "declaration")]
+pub mod declaration;
+#[cfg(feature = "default")]
 pub mod mailbox;
-mod settings;
+#[cfg(feature = "default")]
 pub mod slave;
 
+#[cfg(feature = "default")]
 use std::sync::Arc;
+#[cfg(feature = "default")]
 use std::sync::atomic::{AtomicU8, Ordering};
+#[cfg(feature = "default")]
 use std::time::{Duration, Instant};
 
+#[cfg(feature = "default")]
 use canopen::sdo::{Sdo, client};
+#[cfg(feature = "default")]
 use codec::hex::prefixed_number;
+#[cfg(feature = "default")]
 use context::property::ETHERCAT_STATION_ADDRESS;
+#[cfg(feature = "default")]
 pub use datagram::{Command, Datagram};
+#[cfg(feature = "default")]
+pub use declaration::STREAM_OBJECT;
+#[cfg(feature = "default")]
+use declaration::TIMEOUT;
+#[cfg(feature = "default")]
 use ethernet::{Frame, Link, Mac};
+#[cfg(feature = "default")]
 pub use mailbox::Message;
+#[cfg(feature = "default")]
 use net::Target;
+#[cfg(feature = "default")]
 pub use slave::{Segment, Slave};
+#[cfg(feature = "default")]
 use transport::ArrivalIdentity;
+#[cfg(feature = "default")]
 use transport::arrived::next_arrival;
+#[cfg(feature = "default")]
 use transport::error::{Result, protocol_error};
+#[cfg(feature = "default")]
 use transport::held::Held;
+#[cfg(feature = "default")]
 use transport::loopback::{FarEnd, LOOPBACK_TIMEOUT, Loopback};
+#[cfg(feature = "default")]
 use transport::{Acknowledgement, Arrived, Configured, Directions, Transport};
 
+#[cfg(feature = "default")]
 use crate::mailbox::{COE, MAILBOX_SIZE, RECEIVE_MAILBOX, TRANSMIT_MAILBOX};
+#[cfg(feature = "default")]
 use crate::slave::{AL_STATUS, OPERATIONAL};
 
-/// The object a Stream travels as unless a target says otherwise: the
-/// first manufacturer-specific index.
-pub const STREAM_OBJECT: (u16, u8) = (0x2000, 0);
-
-/// How long a ring that stops answering is waited on when a Location says
-/// nothing else.
-pub const TIMEOUT: Duration = Duration::from_secs(1);
-
 /// The station the loopback's one slave is configured at.
+#[cfg(feature = "default")]
 const LOOPBACK_STATION: u16 = 0x1001;
 
 /// The master's side of one link, addressing one station's one object.
+#[cfg(feature = "default")]
 #[derive(Clone)]
 pub struct EtherCatTransport {
     link: Arc<dyn Link>,
@@ -75,6 +105,7 @@ pub struct EtherCatTransport {
     next_index: Arc<AtomicU8>,
 }
 
+#[cfg(feature = "default")]
 impl EtherCatTransport {
     /// A master on `link` sending from `source`, speaking to `station`
     /// about [`STREAM_OBJECT`].
@@ -234,6 +265,7 @@ impl EtherCatTransport {
     }
 }
 
+#[cfg(feature = "default")]
 impl Transport for EtherCatTransport {
     fn name(&self) -> &'static str {
         "ethercat"
@@ -280,6 +312,7 @@ impl Transport for EtherCatTransport {
     }
 }
 
+#[cfg(feature = "default")]
 impl EtherCatTransport {
     /// Both ends on one in-process ring: a master and one slave at
     /// [`LOOPBACK_STATION`], operational, the Stream object empty, the
@@ -299,6 +332,7 @@ impl EtherCatTransport {
 
 /// A Stream of any length travels through the mailbox: the SDO size is
 /// thirty-two bits, and no ceiling below that is a fact of the protocol.
+#[cfg(feature = "default")]
 impl Loopback for EtherCatTransport {
     fn arrival_identity(&self) -> ArrivalIdentity {
         ArrivalIdentity::Named(&[context::property::ETHERCAT_STATION_ADDRESS])
