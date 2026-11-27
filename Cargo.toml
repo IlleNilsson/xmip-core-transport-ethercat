@@ -38,9 +38,8 @@ ethernet = { package = "xmip-core-transport-ethernet", git = "https://github.com
 canopen = { package = "xmip-core-transport-canopen", git = "https://github.com/IlleNilsson/xmip-core-transport-canopen", branch = "main", default-features = false }
 
 [features]
-# The technology: its code, everything it is built on, and its declaration.
-# Without it the crate is its declaration alone (ADR-0064, amendments
-# 2026-10-22 and 2026-11-26).
+# The code and its declaration: the transport guide's "The declaration",
+# module/core/capability/transport/doc/adding-a-transport.md.
 default = [
     "declaration",
     "dep:context",
@@ -49,10 +48,8 @@ default = [
     "dep:ethernet",
     "canopen/default",
 ]
-# The declaration alone: what a Location of this technology is configured
-# with, `declaration::SETTINGS` and `SCHEMES`, with the object a Stream
-# travels as and the wait a Location takes unless it says, and none of the
-# code — what the surfaces' library is to carry (open problem 48).
+# The declaration alone, with the object a Stream travels as and the wait a
+# Location takes unless it says.
 declaration = ["canopen/declaration"]
 
 [dev-dependencies]
